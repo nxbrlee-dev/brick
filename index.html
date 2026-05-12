@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>네온 브릭 브레이커</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone.js/14.8.49/Tone.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a;
+            touch-action: none;
+            overflow: hidden;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        canvas {
+            display: block;
+            border-radius: 12px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5), 0 0 40px rgba(99, 102, 241, 0.2);
+            max-width: 100%;
+            max-height: 80vh;
+        }
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+    </style>
+</head>
+<body class="flex flex-col gap-4">
+
+    <div id="game-container" class="relative flex flex-col items-center">
+        <!-- 상단 스코어보드 -->
+        <div class="glass-panel w-full max-w-[480px] p-4 rounded-xl mb-4 flex justify-between items-center text-white px-6">
+            <div class="flex flex-col">
+                <span class="text-xs uppercase tracking-widest text-slate-400">Score</span>
+                <span id="score-display" class="text-2xl font-black text-indigo-400">0000</span>
+            </div>
+            <div class="flex flex-col items-end">
+                <span class="text-xs uppercase tracking-widest text-slate-400">Lives</span>
+                <div id="lives-display" class="flex gap-1 mt-1 text-pink-500 text-xl">
+                    ❤️❤️❤️
+                </div>
+            </div>
+        </div>
+
+        <!-- 게임 캔버스 -->
+        <canvas id="gameCanvas"></canvas>
+
+        <!-- 게임 오버/시작 오버레이 -->
+        <div id="overlay" class="absolute inset-0 flex items-center justify-center bg-slate-900/80 rounded-xl transition-opacity duration-300 z-10">
+            <div class="text-center p-8 glass-panel rounded-2xl shadow-2xl">
+                <h1 id="overlay-title" class="text-4xl font-black text-white mb-2">NEON BREAKOUT</h1>
+                <p id="overlay-desc" class="text-slate-300 mb-6">마우스나 터치로 패들을 움직이세요.</p>
+                <button id="start-button" class="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 px-10 rounded-full transition-all transform hover:scale-105 active:scale-95 shadow-lg shadow-indigo-500/50">
+                    게임 시작
+                </button>
+            </div>
+        </div>
+
+        <!-- 하단 컨트롤 설명 -->
+        <div class="mt-4 text-slate-500 text-xs text-center uppercase tracking-tighter">
+            Use mouse or touch to move paddle • Space to toggle pause
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('score-display');
+        const livesDisplay = document.getElementById('lives-display');
+        const overlay = document.getElementById('overlay');
+        const overlayTitle = document.getElementById('overlay-title');
+        const overlayDesc = document.getElementById('overlay-desc');
+        const startButton = document.getElementById('start-button');
+
+        // 게임 설정
+        const config = {
+            width: 480,
+            height: 600,
+            paddleWidth: 80,
+            paddleHeight: 12,
+            ballRadius: 8,
+            brickRowCount: 6,
+            brickColumnCount: 7,
+            brickPadding: 8,
+            brickOffsetTop: 50,
+            brickOffsetLeft: 12,
+            brickWidth: 60,
+            brickHeight: 18,
+            colors: ['#818cf8', '#6366f1', '#4f46e5', '#4338ca', '#3730a3', '#312e81']
+        };
+
+        canvas.width = config.width;
+        canvas.height = config.height;
+
+        let score = 0;
+        let lives = 3;
+        let status = 'READY'; // READY, PLAYING, GAMEOVER, WIN
+        let paddleX = (canvas.width - config.paddleWidth) / 2;
+        let x = canvas.width / 2;
+        let y = canvas.height - 30;
+        let dx = 4;
+        let dy = -4;
+        let bricks = [];
+        let particles = [];
+
+        // 전역 범위에서 즉시 생성하지 않고 변수만 선언합니다.
+        let synth = null;
+        let breakSynth = null;
+        let audioInitialized = false;
+
+        function initAudio() {
+            // Tone 라이브러리가 로드되었는지 확인하고 아직 초기화되지 않았다면 실행합니다.
+            if (typeof Tone !== 'undefined' && !audioInitialized) {
+                try {
+                    synth = new Tone.PolySynth(Tone.Synth).toDestination();
+                    breakSynth = new Tone.MembraneSynth().toDestination();
+                    audioInitialized = true;
+                    console.log("Audio initialized successfully.");
+                } catch (e) {
+                    console.error("Failed to initialize Tone.js:", e);
+                }
+            }
+        }
+
+        function playTone(freq, duration = "8n") {
+            try { 
+                // 라이브러리 체크 후 실행
+                if (typeof Tone !== 'undefined') {
+                    if (!audioInitialized) initAudio();
+                    
+                    Tone.start(); 
+                    if (synth) synth.triggerAttackRelease(freq, duration); 
+                }
+            } catch(e) {
+                // 오디오 오류가 발생해도 게임 플레이에는 지장이 없도록 처리
+            }
+        }
+
+        function initBricks() {
+            bricks = [];
+            for (let c = 0; c < config.brickColumnCount; c++) {
+                bricks[c] = [];
+                for (let r = 0; r < config.brickRowCount; r++) {
+                    bricks[c][r] = { x: 0, y: 0, status: 1, color: config.colors[r] };
+                }
+            }
+        }
+
+        function createParticles(x, y, color) {
+            for (let i = 0; i < 8; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    size: Math.random() * 3 + 1,
+                    speedX: (Math.random() - 0.5) * 6,
+                    speedY: (Math.random() - 0.5) * 6,
+                    life: 1.0,
+                    color: color
+                });
+            }
+        }
+
+        function mouseMoveHandler(e) {
+            const relativeX = e.clientX - canvas.offsetLeft;
+            if (relativeX > 0 && relativeX < canvas.width) {
+                paddleX = relativeX - config.paddleWidth / 2;
+            }
+        }
+
+        function touchMoveHandler(e) {
+            e.preventDefault();
+            const touch = e.touches[0];
+            const relativeX = touch.clientX - canvas.getBoundingClientRect().left;
+            if (relativeX > 0 && relativeX < canvas.width) {
+                paddleX = relativeX - config.paddleWidth / 2;
+            }
+        }
+
+        document.addEventListener("mousemove", mouseMoveHandler, false);
+        document.addEventListener("touchmove", touchMoveHandler, { passive: false });
+
+        function collisionDetection() {
+            for (let c = 0; c < config.brickColumnCount; c++) {
+                for (let r = 0; r < config.brickRowCount; r++) {
+                    let b = bricks[c][r];
+                    if (b.status === 1) {
+                        if (x > b.x && x < b.x + config.brickWidth && y > b.y && y < b.y + config.brickHeight) {
+                            dy = -dy;
+                            b.status = 0;
+                            score += 10;
+                            scoreDisplay.textContent = score.toString().padStart(4, '0');
+                            createParticles(b.x + config.brickWidth / 2, b.y + config.brickHeight / 2, b.color);
+                            playTone("C5", "16n");
+                            
+                            if (score === config.brickRowCount * config.brickColumnCount * 10) {
+                                gameWin();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        function drawBall() {
+            ctx.beginPath();
+            ctx.arc(x, y, config.ballRadius, 0, Math.PI * 2);
+            ctx.fillStyle = "#fff";
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = "#fff";
+            ctx.fill();
+            ctx.closePath();
+            ctx.shadowBlur = 0;
+        }
+
+        function drawPaddle() {
+            ctx.beginPath();
+            ctx.roundRect(paddleX, canvas.height - config.paddleHeight - 10, config.paddleWidth, config.paddleHeight, 6);
+            ctx.fillStyle = "#6366f1";
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = "#6366f1";
+            ctx.fill();
+            ctx.closePath();
+            ctx.shadowBlur = 0;
+        }
+
+        function drawBricks() {
+            for (let c = 0; c < config.brickColumnCount; c++) {
+                for (let r = 0; r < config.brickRowCount; r++) {
+                    if (bricks[c][r].status === 1) {
+                        const brickX = (c * (config.brickWidth + config.brickPadding)) + config.brickOffsetLeft;
+                        const brickY = (r * (config.brickHeight + config.brickPadding)) + config.brickOffsetTop;
+                        bricks[c][r].x = brickX;
+                        bricks[c][r].y = brickY;
+                        
+                        ctx.beginPath();
+                        ctx.roundRect(brickX, brickY, config.brickWidth, config.brickHeight, 4);
+                        ctx.fillStyle = bricks[c][r].color;
+                        ctx.fill();
+                        ctx.closePath();
+                    }
+                }
+            }
+        }
+
+        function drawParticles() {
+            particles.forEach((p, index) => {
+                p.x += p.speedX;
+                p.y += p.speedY;
+                p.life -= 0.02;
+                if (p.life <= 0) {
+                    particles.splice(index, 1);
+                } else {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                    ctx.fillStyle = p.color;
+                    ctx.globalAlpha = p.life;
+                    ctx.fill();
+                    ctx.globalAlpha = 1.0;
+                    ctx.closePath();
+                }
+            });
+        }
+
+        function gameOver() {
+            status = 'GAMEOVER';
+            overlay.classList.remove('opacity-0', 'pointer-events-none');
+            overlayTitle.textContent = "GAME OVER";
+            overlayTitle.classList.add('text-red-500');
+            overlayDesc.textContent = `최종 점수: ${score}점`;
+            startButton.textContent = "다시 시도";
+            playTone("G2", "4n");
+        }
+
+        function gameWin() {
+            status = 'WIN';
+            overlay.classList.remove('opacity-0', 'pointer-events-none');
+            overlayTitle.textContent = "YOU WIN!";
+            overlayTitle.classList.add('text-green-400');
+            overlayDesc.textContent = "대단합니다! 모든 벽돌을 깼습니다.";
+            startButton.textContent = "한 번 더 하기";
+            playTone("C6", "2n");
+        }
+
+        function startGame() {
+            score = 0;
+            lives = 3;
+            status = 'PLAYING';
+            scoreDisplay.textContent = "0000";
+            livesDisplay.textContent = "❤️❤️❤️";
+            overlay.classList.add('opacity-0', 'pointer-events-none');
+            overlayTitle.classList.remove('text-red-500', 'text-green-400');
+            initBricks();
+            resetBall();
+            
+            // 게임 시작 시 오디오 컨텍스트를 활성화합니다.
+            if (typeof Tone !== 'undefined') {
+                Tone.start().then(() => {
+                    initAudio();
+                });
+            }
+        }
+
+        function resetBall() {
+            x = canvas.width / 2;
+            y = canvas.height - 40;
+            dx = (Math.random() > 0.5 ? 4 : -4);
+            dy = -4;
+            paddleX = (canvas.width - config.paddleWidth) / 2;
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (status === 'PLAYING') {
+                drawBricks();
+                drawBall();
+                drawPaddle();
+                drawParticles();
+                collisionDetection();
+
+                // 벽 충돌 (좌우)
+                if (x + dx > canvas.width - config.ballRadius || x + dx < config.ballRadius) {
+                    dx = -dx;
+                    playTone("A4", "16n");
+                }
+                // 벽 충돌 (상단)
+                if (y + dy < config.ballRadius) {
+                    dy = -dy;
+                    playTone("A4", "16n");
+                } 
+                // 하단 충돌 (패들 및 게임오버)
+                else if (y + dy > canvas.height - config.ballRadius - 10) {
+                    if (x > paddleX && x < paddleX + config.paddleWidth) {
+                        // 패들의 어느 부분에 맞았는지에 따라 각도 조절
+                        let hitPos = (x - (paddleX + config.paddleWidth / 2)) / (config.paddleWidth / 2);
+                        dx = hitPos * 5;
+                        dy = -dy;
+                        playTone("E5", "16n");
+                    } else if (y + dy > canvas.height - config.ballRadius) {
+                        lives--;
+                        livesDisplay.textContent = "❤️".repeat(lives);
+                        playTone("F3", "8n");
+                        if (!lives) {
+                            gameOver();
+                        } else {
+                            resetBall();
+                        }
+                    }
+                }
+
+                x += dx;
+                y += dy;
+            } else {
+                // 대기 화면에서도 파티클은 흐르도록
+                drawBricks();
+                drawParticles();
+            }
+
+            requestAnimationFrame(draw);
+        }
+
+        startButton.addEventListener('click', startGame);
+
+        window.onload = () => {
+            initBricks();
+            draw();
+        };
+
+    </script>
+</body>
+</html>
